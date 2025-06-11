@@ -1,4 +1,4 @@
- #include <iostream>
+#include <iostream>
 #include <string>
 #include <vector>
 #include <cstring>
@@ -27,7 +27,7 @@ namespace TFTP{
         WRQ = 2; //write request
         DATA = 3, //data packets 
         ACK = 4, // acknowledgment  
-        ERROR - 5 
+        ERROR = 5 
     }; 
 
     namespace Mode {
@@ -41,8 +41,8 @@ class TFTPClient{
 
 private:
      int socket_fd; 
-     struct sockaddr_in server_addr; 
-     struct sockaddr_in from_addr;
+     struct sockaddr_in dest_addr; 
+     struct sockaddr_in src_addr;
      socklen_t addr_len; 
      std::string server_ip;
      uint16_t server_port;
@@ -50,16 +50,18 @@ private:
      int total_bytes; 
      char buffer[TFTP::MAX_PACKET_SIZE];
 
-
 public:
 
      explicit TFTPClient(const std::string& server_ip, uint16_t server_port = TFTP::SERVER_PORT) 
     : socket_fd(-1), server_ip(server_ip), server_port(server_port), expected_block(1), total_bytes(0){
-         std::memset(&server_addr, 0, sizeof(server_addr)); 
-         std::memset(&from_addr, 0, sizeof(from_addr)); 
+
+         std::memset(&dest_addr, 0, sizeof(dest_addr)); 
+         std::memset(&src_addr, 0, sizeof(src_addr)); 
          std::memset(buffer, 0, TFTP::MAX_PACKET_SIZE);
          std::cout << "TFTP initilized for server: " << server_ip << " : " << server_port << std::endl; ;
     }
+
+     /*destructor */ 
 
      ~TFTPClient(){
         if(socket_fd >=0){
@@ -70,19 +72,21 @@ public:
 
     void connect()
     {
-        std::cout << "establishing connection\n";
+        std::cout << "=== establishing connection === \n";
 
-        socket_fd = socket(AF_INET, SOCK_DGRAM, 0); 
+        socket_fd = socket(AF_INET, SOCK_DGRAM, 0);
+
         if(socket_fd < 0){
             throw std::runtime_error("failed to create udp socket: " + std::string(strerror(errno))); 
         }
         std::cout << "udp socket successfully created fd : " << socket_fd << "\n";
     
-        server_addr.sin_family = AF_INET; 
-        server_addr.sin_port = htons(server_port); 
+        dest_addr.sin_family = AF_INET; 
+        dest_addr.sin_port = htons(server_port); 
 
         /*convsert ip address from string to binary format */ 
-        int convert_result = inet_pton(AF_INET, server_ip.c_str(), &server_addr.sin_addr); 
+        int convert_result = inet_pton(AF_INET, server_ip.c_str(), &dest_addr.sin_addr); 
+
         if(convert_result <= 0){
              close(socket_fd)
              socket_fd = -1; 
@@ -95,22 +99,89 @@ public:
          struct timeval tv; 
          tv.tv_sec = TFTP::TIMEOUT_SECONDS; 
          tv.tv_usec = 0; 
-         if(setsockopt(socket_fd, SOL_SOCKET))
 
+         /*set time outs for socket */ 
+         if(setsockopt(socket_fd, SOL_SOCKET, &tv, sizeof(tv)) < 0)
+         {
+             close(socket_fd); 
+             socket_fd = -1;
+             throw std::runtime_error("failed to set socket timout: " + std::string(std::strerror(errno)));
+         }
 
+         std::cout << "socket timeouts set to " << TFTP::TIMEOUT_SECONDS << "seconds \n"; 
+    }
+
+     void send_rrq(const char *filename, const char *mode = TFTP::Mode::OCTET)
+     {
+        std::size_t file_len = std::strlen(filename); 
+        std::size_t mode_len = std::strlen(mode); 
         
+        /*opcode + filename + null + mode */ 
+        std::size_t rrq_len = 2 + file_len + 1 + mode_len + 1;
 
+        if(rrq_len > TFTP::MAX_PACKET_SIZE)
+        {
+            close(socket_fd); 
+            socket_fd = -1;
+            throw std::runtime_error("rrq packet too large:" + std:to_string(rrq_len) + " bytes (max:  "
+                                     + std::to_string(TFTP::MAX_PACKET_SIZE) + " )\n"); 
 
+        }
 
+        buffer[0] = 0x00; 
+        buffer[1] = static_cast<uint8_t>(TFTP::Opcode::RRQ); 
 
+        std::strcpy(buffer + 2, filename);
+        std::strcpy(buffer + 2 + filename + 1, mode);
 
+        std::cout << "RRQ packet: \n"; 
+        std::cout << "Filname : " << filename << "\n";
+        std::cout << "mode: " << mode << "\n";
+        std::cout << "packet size: " << rrq_len << "bytes\n";
 
+        ssize_t sent_bytes = sendto(socket_fd, buffer, rrq_len, 0, (struct sockaddr*)&dest_addr, sizeof(dest_addr)); 
+        
+        if(sent_bytes < 0)
+        {
+            close(socket_fd);
+            socket_fd = -1; 
+            throw std::runtime_error("filed to send RRQ: " + std::string(std::strerror(errno))); 
+        }
+        
+        std::cout << "rrq sent successfully (" << sent_bytes << " bytes\n)"; 
+    }
 
+    
+    void recieve_file(void)
+    {
+        std::cout << "=== receiving file data === \n";
+        
+        while (true) 
+        {
+            ssize_t rec = recvfrom(socket_fd, buffer, TFTP::MAX_PACKET_SIZE, 0, (struct sockaddr*)&src_addr);
+            
+            if(rec < 0)
+            {
+                close(socket_fd); 
+                socket_fd = -1; 
+                throw std::runtime_error("failed to recieve data: " + std::string(std::strerror(errno))); 
+            }
 
+            if(rec < 4)
+            {
+                std::cerr << "recieved packet is too small (" << rec << "bytes\n"; 
+                break; 
+            }
 
-
+            uint16_t opcode = (static_cast<uint8_t>(buffer[0]) << 8) |  static_cast<uint8_t>(buffer[1]); 
+            
+        }
 
     }
+
+
+
+
 
 }
 
