@@ -173,7 +173,51 @@ public:
                 break; 
             }
 
-            uint16_t opcode = (static_cast<uint8_t>(buffer[0]) << 8) |  static_cast<uint8_t>(buffer[1]); 
+            uint16_t opcode = (static_cast<uint8_t>(buffer[0]) << 8) |  static_cast<uint8_t>(buffer[1]);
+           
+            std::cout << "\nReceived packet: " << rec << "bytes, opcode: " << opcode << "\n";
+
+            if(opcode == static_cast<uint16_t>(TFTP::Opcode::DATA))
+            {
+                uint16_t block_num = (static_cast<uint8_t>(buffer[2]) << 8) | static_cast<uint8_t>(buffer[3]); 
+
+                int data_len = rec - 4;
+
+                std::cout << "DATA block #" << block_num << " : " << data_len << " bytes of data";
+
+                if(block_num != expected_block)
+                {
+                    std::cerr << "Warning, expected block" << expected_block << ", recieved block " << block_num << "\n";
+                }
+
+                std::cout << "Data content (first " << (data_len > 100 ? 100 : data_len) << " bytes):\n";
+                std::cout << "--- START DATA ---\n";
+
+                write(STDOUT_FILENO, buffer + 4, data_len > 100 ? 100 :data_len);
+
+                if(data_len > 100)
+                {
+                    std::cout << "\n... (" << (data_len - 100) << " more bytes)";
+                }
+                std::cout << "\n--- END DATA ---\n";
+            
+                total_bytes += data_len;
+
+                char ack_packet[4]; 
+                ack_packet[0] = 0x00; 
+                ack_packet[1] = static_cast<uint8_t>(TFTP::Opcode::ACK);
+                ack_packet[2] = buffer[2]; 
+                ack_packet[3] = buffer[3];
+
+                ssize_t ack_send = sendto(socket_fd, ack_packet, 4, 0, (struct sockaddr*)&src_addr, addr_len);
+
+                if(ack_packet < 0)
+                {
+                    throw std::runtime_error("Failed to send ack: " + std::string(std::strerror(errno)));
+                }
+
+                std::cout << "Ack sent block #" << block_num << "\n";
+            }
             
         }
 
